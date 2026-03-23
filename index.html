@@ -201,6 +201,12 @@ body{
 .ibtn-mic:hover{background:rgba(245,166,35,.1);color:var(--amber);}
 .ibtn-mic.on{background:rgba(232,68,90,.15);border-color:rgba(232,68,90,.4);color:var(--red);animation:mp 1s infinite;}
 @keyframes mp{0%,100%{box-shadow:0 0 0 0 rgba(232,68,90,.4);}50%{box-shadow:0 0 0 5px rgba(232,68,90,0);}}
+.ibtn-tab{background:var(--ibg);border:1px solid var(--border2);color:var(--text2);}
+.ibtn-tab:hover{background:rgba(0,200,212,.1);border-color:rgba(0,200,212,.3);color:var(--cyan);}
+.ibtn-tab.on{background:rgba(0,229,155,.12);border-color:rgba(0,229,155,.4);color:var(--green);animation:tp 1.5s infinite;}
+@keyframes tp{0%,100%{box-shadow:0 0 0 0 rgba(0,229,155,.4);}50%{box-shadow:0 0 0 6px rgba(0,229,155,0);}}
+.tab-banner{text-align:center;padding:3px 8px;margin:2px 0;}
+.tab-banner span{font-size:10px;color:var(--cyan2);font-family:'IBM Plex Mono',monospace;background:rgba(0,200,212,.07);border:1px solid rgba(0,200,212,.18);border-radius:5px;padding:3px 9px;display:inline-block;}
 .web-tog{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--text3);cursor:pointer;white-space:nowrap;font-family:'IBM Plex Mono',monospace;}
 .web-tog input{accent-color:var(--cyan);width:11px;height:11px;}
 .web-tog.on{color:var(--cyan2);}
@@ -360,6 +366,7 @@ body{
       <textarea id="ci" placeholder="Ask a question or tap 🎤 to speak..." rows="1"
         onkeydown="onKey(event)" oninput="resize(this)"></textarea>
       <button class="ibtn ibtn-mic" id="mic-btn" onclick="toggleMic()" title="Voice input">🎤</button>
+      <button class="ibtn ibtn-tab" id="tab-btn" onclick="toggleTabCapture()" title="Capture Zoom/Teams tab audio — auto-answers questions">🖥️</button>
       <button class="ibtn ibtn-send" id="send-btn" onclick="sendMsg()">➤</button>
     </div>
   </div>
@@ -548,6 +555,21 @@ body{
           <b style="color:var(--amber)">🎤 Voice:</b> Tap mic in chat bar → speak → auto-sends. Works in Chrome &amp; Edge on Windows 11. On iPhone, open in Safari.<br>
           <b style="color:var(--cyan)">🌐 Web Search:</b> Anthropic only · $0.01/search. Toggle in chat bar.
         </div>
+      </div>
+      <div class="card">
+        <div class="card-title">🖥️ Tab Audio Capture — <span>Auto-answer Zoom / Teams questions</span></div>
+        <div style="font-size:12px;color:var(--text2);line-height:1.8;margin-bottom:12px;">
+          Click <b style="color:var(--green)">🖥️</b> in the chat bar → select your <b>Zoom or Teams tab</b> → check <b style="color:var(--cyan)">"Share tab audio"</b>. The coach listens, transcribes questions with Whisper, and auto-generates answers.<br><br>
+          <b style="color:var(--amber)">⚠ Requires an OpenAI key for Whisper transcription.</b> If your main key is already OpenAI, leave the field below blank — it will use that automatically.
+        </div>
+        <div class="field"><label>OpenAI Key for Whisper (leave blank if your main key is already OpenAI)</label><input type="password" id="wk" placeholder="sk-... only needed if main key is Anthropic"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin:8px 0 4px;">
+          <label style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text2);cursor:pointer;">
+            <input type="checkbox" id="auto-send-cb" checked style="accent-color:var(--cyan);width:13px;height:13px;">
+            Auto-send detected interview questions (recommended — unchecked = preview only)
+          </label>
+        </div>
+        <div class="brow"><button class="btn bc" onclick="saveWhisperSettings()">💾 Save Tab Audio Settings</button></div>
       </div>
     </div>
   </div>
@@ -1483,6 +1505,207 @@ async function callAI(prompt, maxTokens) {
     var d = await resp.json();
     return d.choices && d.choices[0] ? d.choices[0].message.content : '';
   }
+}
+
+// ================================================================
+// TAB AUDIO CAPTURE  (Zoom / Teams → Whisper → Auto-answer)
+// ================================================================
+var tabStream = null;
+var tabRecorder = null;
+var tabCapturing = false;
+var whisperKey = '';
+var autoSendTab = true;
+
+function getWhisperKey() {
+  // Prefer explicit whisper key, fall back to OpenAI chat key
+  if (whisperKey) return whisperKey;
+  if (apiKey && apiKey.indexOf('sk-') === 0 && apiKey.indexOf('sk-ant') !== 0) return apiKey;
+  return null;
+}
+
+async function toggleTabCapture() {
+  if (tabCapturing) { stopTabCapture(); return; }
+
+  if (!getWhisperKey()) {
+    toast('Add an OpenAI key for Whisper in Settings → Tab Audio Capture', 'error');
+    sw('settings');
+    return;
+  }
+
+  try {
+    tabStream = await navigator.mediaDevices.getDisplayMedia({ video: false, audio: true });
+
+    if (!tabStream || tabStream.getAudioTracks().length === 0) {
+      toast('No audio captured. Select a tab and check "Share tab audio".', 'error');
+      if (tabStream) tabStream.getTracks().forEach(function(t) { t.stop(); });
+      tabStream = null;
+      return;
+    }
+
+    // If user stops sharing from browser UI, clean up
+    tabStream.getAudioTracks()[0].onended = stopTabCapture;
+
+    tabCapturing = true;
+    var btn = document.getElementById('tab-btn');
+    btn.classList.add('on');
+    btn.textContent = '⏹';
+    toast('🖥️ Tab audio active — listening for interview questions…', 'ok');
+    startChunkRecording();
+  } catch (e) {
+    // User cancelled share dialog → AbortError / NotAllowedError — silent
+    if (e.name !== 'AbortError' && e.name !== 'NotAllowedError') {
+      toast('Could not capture audio: ' + e.message, 'error');
+    }
+  }
+}
+
+function stopTabCapture() {
+  tabCapturing = false;
+  if (tabRecorder && tabRecorder.state !== 'inactive') {
+    try { tabRecorder.stop(); } catch(e) {}
+  }
+  if (tabStream) {
+    tabStream.getTracks().forEach(function(t) { t.stop(); });
+    tabStream = null;
+  }
+  var btn = document.getElementById('tab-btn');
+  if (btn) { btn.classList.remove('on'); btn.textContent = '🖥️'; }
+  toast('Tab audio capture stopped', 'info');
+}
+
+function startChunkRecording() {
+  if (!tabStream || !tabCapturing) return;
+
+  var chunks = [];
+  var mimeType = '';
+  if (typeof MediaRecorder !== 'undefined') {
+    if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
+    else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
+  }
+
+  try {
+    tabRecorder = mimeType
+      ? new MediaRecorder(tabStream, { mimeType: mimeType })
+      : new MediaRecorder(tabStream);
+  } catch(e) {
+    tabRecorder = new MediaRecorder(tabStream);
+    mimeType = '';
+  }
+
+  tabRecorder.ondataavailable = function(e) {
+    if (e.data && e.data.size > 0) chunks.push(e.data);
+  };
+
+  tabRecorder.onstop = async function() {
+    if (chunks.length > 0) {
+      var blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+      // Skip tiny chunks (silence / noise only)
+      if (blob.size > 2000) await transcribeChunk(blob);
+    }
+    chunks = [];
+    // Chain next chunk while still capturing
+    if (tabCapturing) setTimeout(startChunkRecording, 80);
+  };
+
+  tabRecorder.start();
+  // Capture in 7-second chunks — long enough to catch a full question
+  setTimeout(function() {
+    if (tabRecorder && tabRecorder.state === 'recording') tabRecorder.stop();
+  }, 7000);
+}
+
+async function transcribeChunk(blob) {
+  var wk = getWhisperKey();
+  if (!wk) return;
+
+  var fd = new FormData();
+  fd.append('file', blob, 'audio.webm');
+  fd.append('model', 'whisper-1');
+  fd.append('language', 'en');
+  // Context hint helps Whisper handle security/tech jargon
+  fd.append('prompt', 'AppSec interview question about application security, OWASP, DevSecOps, cloud security, vulnerability management.');
+
+  try {
+    var resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + wk },
+      body: fd
+    });
+    if (!resp.ok) return; // Silently skip on API errors
+    var data = await resp.json();
+    var text = (data.text || '').trim();
+
+    // Filter out noise / filler words
+    if (!text || text.length < 8) return;
+    if (/^(thank you|thanks|okay|ok|uh|um|hmm|yeah|yes|no|alright|sure|right|got it)\.?$/i.test(text)) return;
+
+    handleTabTranscription(text);
+  } catch(e) {
+    // Network errors — skip silently so capture loop continues
+  }
+}
+
+function handleTabTranscription(text) {
+  sw('chat'); // Make sure chat tab is visible
+
+  var inp = document.getElementById('ci');
+  var isQuestion = looksLikeQuestion(text);
+
+  // Always show a banner so the user can see what was heard
+  addTabBanner(text);
+
+  if (autoSendTab && isQuestion) {
+    inp.value = text;
+    resize(inp);
+    setTimeout(sendMsg, 500);
+  } else {
+    // Append to input box for manual review / editing
+    var existing = inp.value.trim();
+    inp.value = existing ? existing + ' ' + text : text;
+    resize(inp);
+    if (!isQuestion) toast('Heard (not a question): ' + text.slice(0, 60), 'info');
+  }
+}
+
+function addTabBanner(text) {
+  var c = document.getElementById('chat-msgs');
+  var d = document.createElement('div');
+  d.className = 'tab-banner';
+  var preview = text.length > 90 ? text.slice(0, 90) + '…' : text;
+  d.innerHTML = '<span>🖥️ ' + preview.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</span>';
+  c.appendChild(d);
+  c.scrollTop = c.scrollHeight;
+}
+
+function looksLikeQuestion(text) {
+  var t = text.toLowerCase().trim();
+  return text.indexOf('?') !== -1 ||
+    t.indexOf('tell me') === 0 ||
+    t.indexOf('describe') === 0 ||
+    t.indexOf('explain') === 0 ||
+    t.indexOf('how ') === 0 ||
+    t.indexOf('what ') === 0 ||
+    t.indexOf('why ') === 0 ||
+    t.indexOf('can you') === 0 ||
+    t.indexOf('could you') === 0 ||
+    t.indexOf('walk me') === 0 ||
+    t.indexOf('talk me') === 0 ||
+    t.indexOf('have you') === 0 ||
+    t.indexOf('do you') === 0 ||
+    t.indexOf('would you') === 0 ||
+    t.indexOf('give me') === 0 ||
+    t.indexOf('share ') === 0 ||
+    t.indexOf('discuss') === 0 ||
+    t.indexOf('compare') === 0 ||
+    t.indexOf('when ') === 0 ||
+    t.indexOf('where ') === 0;
+}
+
+function saveWhisperSettings() {
+  var wk = document.getElementById('wk').value.trim();
+  if (wk) whisperKey = wk;
+  autoSendTab = document.getElementById('auto-send-cb').checked;
+  toast('Tab audio settings saved ✓', 'ok');
 }
 
 // ================================================================
