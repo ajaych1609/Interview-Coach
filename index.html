@@ -9,6 +9,33 @@
 <meta name="apple-mobile-web-app-title" content="Interview Coach">
 <meta name="theme-color" content="#0d1b2e">
 <title>Interview Coach Pro</title>
+  /* ZOOM GUIDED MODAL */
+#zoom-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:600;display:none;align-items:center;justify-content:center;padding:18px;}
+#zoom-modal-overlay.open{display:flex;}
+.zoom-modal{background:var(--navy2);border:1px solid var(--border2);border-radius:16px;padding:24px;max-width:460px;width:100%;}
+.zoom-modal h3{font-size:15px;font-weight:600;margin-bottom:3px;color:var(--text);}
+.zm-sub{font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace;margin-bottom:18px;}
+.zm-steps{display:flex;flex-direction:column;gap:10px;margin-bottom:20px;}
+.zm-step{display:flex;align-items:flex-start;gap:12px;background:var(--ibg);border:1px solid var(--border);border-radius:10px;padding:11px 13px;}
+.zm-step-num{width:22px;height:22px;border-radius:50%;flex-shrink:0;background:linear-gradient(135deg,var(--cyan2),var(--blue));color:#fff;font-size:11px;font-weight:700;font-family:'IBM Plex Mono',monospace;display:flex;align-items:center;justify-content:center;}
+.zm-step-text{font-size:12px;color:var(--text2);line-height:1.6;}
+.zm-step-text b{color:var(--cyan);}
+.zm-step-text code{background:rgba(0,200,212,.12);color:var(--cyan);padding:1px 6px;border-radius:4px;font-size:11px;font-family:'IBM Plex Mono',monospace;}
+.zm-btns{display:flex;gap:8px;justify-content:flex-end;}
+/* AUDIO METER */
+#audio-meter-wrap{display:none;align-items:center;gap:8px;padding:4px 16px;background:rgba(0,200,212,.04);border-top:1px solid var(--border);flex-shrink:0;}
+#audio-meter-wrap.visible{display:flex;}
+.meter-label{font-size:10px;color:var(--text3);font-family:'IBM Plex Mono',monospace;flex-shrink:0;}
+#audio-meter-bar-wrap{flex:1;height:5px;background:var(--ibg);border-radius:3px;overflow:hidden;border:1px solid var(--border2);}
+#audio-meter-bar{height:100%;width:0%;border-radius:3px;background:linear-gradient(90deg,var(--cyan2),var(--green));transition:width .08s ease;}
+#meter-status{font-size:10px;font-family:'IBM Plex Mono',monospace;color:var(--text3);flex-shrink:0;min-width:95px;text-align:right;}
+/* TRANSCRIPTION PREVIEW */
+#transcription-preview{display:none;margin:0 16px 4px;background:rgba(0,200,212,.07);border:1px solid rgba(0,200,212,.2);border-radius:8px;padding:7px 28px 7px 12px;font-size:11px;color:var(--cyan2);font-family:'IBM Plex Mono',monospace;line-height:1.5;position:relative;flex-shrink:0;}
+#transcription-preview.visible{display:block;}
+.tp-label{font-size:9px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--text3);margin-bottom:2px;}
+#tp-dismiss{position:absolute;top:7px;right:9px;cursor:pointer;color:var(--text3);font-size:13px;line-height:1;}
+#tp-dismiss:hover{color:var(--red);}
+
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 :root{
@@ -359,7 +386,18 @@ body{
       <button class="qbtn" onclick="qp('What are the latest AppSec trends right now?')">🌐 Trends</button>
       <button class="qbtn" onclick="useJD()">🎯 Tailor to JD</button>
     </div>
+       <div id="audio-meter-wrap">
+      <span class="meter-label">🎙 Zoom audio</span>
+      <div id="audio-meter-bar-wrap"><div id="audio-meter-bar"></div></div>
+      <span id="meter-status">listening…</span>
+    </div>
+    <div id="transcription-preview">
+      <div class="tp-label">🖥️ Heard from Zoom</div>
+      <span id="tp-text"></span>
+      <span id="tp-dismiss" onclick="dismissPreview()">✕</span>
+    </div>
     <div class="ibar">
+
       <label class="web-tog on" id="web-tog">
         <input type="checkbox" id="web-cb" checked onchange="toggleWeb(this)"> 🌐
       </label>
@@ -1508,214 +1546,157 @@ async function callAI(prompt, maxTokens) {
 }
 
 // ================================================================
-// TAB AUDIO CAPTURE  (Zoom / Teams → Whisper → Auto-answer)
-// ================================================================
-var tabStream = null;
-var tabRecorder = null;
-var tabCapturing = false;
-var whisperKey = '';
-var autoSendTab = true;
+// 
+  // TAB AUDIO CAPTURE · Zoom/Teams → Whisper → Searchbar
+var tabStream=null,tabRecorder=null,tabCapturing=false,whisperKey='',autoSendTab=true;
+var audioCtx=null,analyser=null,meterRAF=null;
 
-function getWhisperKey() {
-  // Prefer explicit whisper key, fall back to OpenAI chat key
-  if (whisperKey) return whisperKey;
-  if (apiKey && apiKey.indexOf('sk-') === 0 && apiKey.indexOf('sk-ant') !== 0) return apiKey;
+function getWhisperKey(){
+  if(whisperKey)return whisperKey;
+  if(apiKey&&apiKey.indexOf('sk-')===0&&apiKey.indexOf('sk-ant')!==0)return apiKey;
   return null;
 }
 
-async function toggleTabCapture() {
-  if (tabCapturing) { stopTabCapture(); return; }
+function toggleTabCapture(){
+  if(tabCapturing){stopTabCapture();return;}
+  if(!getWhisperKey()){toast('Add an OpenAI key for Whisper in Settings → Tab Audio Capture','error');sw('settings');return;}
+  openZoomModal();
+}
 
-  if (!getWhisperKey()) {
-    toast('Add an OpenAI key for Whisper in Settings → Tab Audio Capture', 'error');
-    sw('settings');
-    return;
-  }
+function openZoomModal(){document.getElementById('zoom-modal-overlay').classList.add('open');}
+function closeZoomModal(){document.getElementById('zoom-modal-overlay').classList.remove('open');}
 
-  try {
-    // Chrome REQUIRES video:true — pure audio-only getDisplayMedia is not supported in Chrome
-    tabStream = await navigator.mediaDevices.getDisplayMedia({
-      video: { width: 1, height: 1, frameRate: 1 },
-      audio: { echoCancellation: false, noiseSuppression: false, sampleRate: 16000 }
+async function startZoomCapture(){
+  closeZoomModal();
+  try{
+    tabStream=await navigator.mediaDevices.getDisplayMedia({
+      video:{width:1,height:1,frameRate:1},
+      audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,sampleRate:16000}
     });
-
-    // Immediately disable video track — we only care about audio
-    tabStream.getVideoTracks().forEach(function(t) { t.enabled = false; });
-
-    if (tabStream.getAudioTracks().length === 0) {
-      toast('No audio detected! When the share dialog opens, select your Zoom/Teams tab and TICK "Share tab audio".', 'error');
-      tabStream.getTracks().forEach(function(t) { t.stop(); });
-      tabStream = null;
-      return;
+    tabStream.getVideoTracks().forEach(function(t){t.enabled=false;});
+    if(tabStream.getAudioTracks().length===0){
+      toast('No audio track! Tick "Share tab audio" in the dialog.','error');
+      tabStream.getTracks().forEach(function(t){t.stop();}); tabStream=null; return;
     }
-
-    // If user stops sharing from browser UI, clean up
-    tabStream.getAudioTracks()[0].onended = stopTabCapture;
-
-    tabCapturing = true;
-    var btn = document.getElementById('tab-btn');
-    btn.classList.add('on');
-    btn.textContent = '⏹';
-    toast('🖥️ Tab audio active — listening for interview questions…', 'ok');
+    tabStream.getAudioTracks()[0].onended=function(){stopTabCapture();};
+    tabCapturing=true;
+    var btn=document.getElementById('tab-btn');
+    btn.classList.add('on'); btn.textContent='⏹';
+    document.getElementById('audio-meter-wrap').classList.add('visible');
+    startAudioMeter(tabStream);
+    toast('✅ Zoom audio connected — listening for questions…','ok');
     startChunkRecording();
-  } catch (e) {
-    // User cancelled share dialog → AbortError / NotAllowedError — silent
-    if (e.name !== 'AbortError' && e.name !== 'NotAllowedError') {
-      toast('Could not capture audio: ' + e.message, 'error');
-    }
+  }catch(e){
+    if(e.name!=='AbortError'&&e.name!=='NotAllowedError')toast('Could not capture: '+e.message,'error');
   }
 }
 
-function stopTabCapture() {
-  tabCapturing = false;
-  if (tabRecorder && tabRecorder.state !== 'inactive') {
-    try { tabRecorder.stop(); } catch(e) {}
-  }
-  if (tabStream) {
-    tabStream.getTracks().forEach(function(t) { t.stop(); });
-    tabStream = null;
-  }
-  var btn = document.getElementById('tab-btn');
-  if (btn) { btn.classList.remove('on'); btn.textContent = '🖥️'; }
-  toast('Tab audio capture stopped', 'info');
+function stopTabCapture(){
+  tabCapturing=false;
+  if(tabRecorder&&tabRecorder.state!=='inactive'){try{tabRecorder.stop();}catch(e){}}
+  if(tabStream){tabStream.getTracks().forEach(function(t){t.stop();}); tabStream=null;}
+  stopAudioMeter();
+  document.getElementById('audio-meter-wrap').classList.remove('visible');
+  document.getElementById('transcription-preview').classList.remove('visible');
+  var btn=document.getElementById('tab-btn');
+  if(btn){btn.classList.remove('on'); btn.textContent='🖥️';}
+  toast('Tab audio capture stopped','info');
 }
 
-function startChunkRecording() {
-  if (!tabStream || !tabCapturing) return;
-
-  var chunks = [];
-  var mimeType = '';
-  if (typeof MediaRecorder !== 'undefined') {
-    if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) mimeType = 'audio/webm;codecs=opus';
-    else if (MediaRecorder.isTypeSupported('audio/webm')) mimeType = 'audio/webm';
-  }
-
-  try {
-    tabRecorder = mimeType
-      ? new MediaRecorder(tabStream, { mimeType: mimeType })
-      : new MediaRecorder(tabStream);
-  } catch(e) {
-    tabRecorder = new MediaRecorder(tabStream);
-    mimeType = '';
-  }
-
-  tabRecorder.ondataavailable = function(e) {
-    if (e.data && e.data.size > 0) chunks.push(e.data);
-  };
-
-  tabRecorder.onstop = async function() {
-    if (chunks.length > 0) {
-      var blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
-      // Skip tiny chunks (silence / noise only)
-      if (blob.size > 2000) await transcribeChunk(blob);
+function startAudioMeter(stream){
+  try{
+    audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+    var src=audioCtx.createMediaStreamSource(stream);
+    analyser=audioCtx.createAnalyser(); analyser.fftSize=256;
+    src.connect(analyser);
+    var buf=new Uint8Array(analyser.frequencyBinCount);
+    var bar=document.getElementById('audio-meter-bar');
+    var lbl=document.getElementById('meter-status');
+    function tick(){
+      if(!analyser)return;
+      analyser.getByteFrequencyData(buf);
+      var sum=0; for(var i=0;i<buf.length;i++)sum+=buf[i];
+      var avg=sum/buf.length;
+      bar.style.width=Math.min(100,(avg/80)*100)+'%';
+      if(avg>15){lbl.textContent='audio detected ✓';lbl.style.color='var(--green)';}
+      else{lbl.textContent='silence…';lbl.style.color='var(--text3)';}
+      meterRAF=requestAnimationFrame(tick);
     }
-    chunks = [];
-    // Chain next chunk while still capturing
-    if (tabCapturing) setTimeout(startChunkRecording, 80);
-  };
+    tick();
+  }catch(e){}
+}
 
+function stopAudioMeter(){
+  if(meterRAF){cancelAnimationFrame(meterRAF);meterRAF=null;}
+  if(audioCtx){try{audioCtx.close();}catch(e){} audioCtx=null;}
+  analyser=null;
+}
+
+function startChunkRecording(){
+  if(!tabStream||!tabCapturing)return;
+  var chunks=[],mimeType='';
+  if(typeof MediaRecorder!=='undefined'){
+    if(MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))mimeType='audio/webm;codecs=opus';
+    else if(MediaRecorder.isTypeSupported('audio/webm'))mimeType='audio/webm';
+  }
+  try{tabRecorder=mimeType?new MediaRecorder(tabStream,{mimeType:mimeType}):new MediaRecorder(tabStream);}
+  catch(e){tabRecorder=new MediaRecorder(tabStream);mimeType='';}
+  tabRecorder.ondataavailable=function(e){if(e.data&&e.data.size>0)chunks.push(e.data);};
+  tabRecorder.onstop=async function(){
+    if(chunks.length>0){
+      var blob=new Blob(chunks,{type:mimeType||'audio/webm'});
+      if(blob.size>3000)await transcribeChunk(blob);
+    }
+    if(tabCapturing)setTimeout(startChunkRecording,50);
+  };
   tabRecorder.start();
-  // Capture in 7-second chunks — long enough to catch a full question
-  setTimeout(function() {
-    if (tabRecorder && tabRecorder.state === 'recording') tabRecorder.stop();
-  }, 7000);
+  setTimeout(function(){if(tabRecorder&&tabRecorder.state==='recording')tabRecorder.stop();},7000);
 }
 
-async function transcribeChunk(blob) {
-  var wk = getWhisperKey();
-  if (!wk) return;
-
-  var fd = new FormData();
-  fd.append('file', blob, 'audio.webm');
-  fd.append('model', 'whisper-1');
-  fd.append('language', 'en');
-  // Context hint helps Whisper handle security/tech jargon
-  fd.append('prompt', 'AppSec interview question about application security, OWASP, DevSecOps, cloud security, vulnerability management.');
-
-  try {
-    var resp = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + wk },
-      body: fd
-    });
-    if (!resp.ok) return; // Silently skip on API errors
-    var data = await resp.json();
-    var text = (data.text || '').trim();
-
-    // Filter out noise / filler words
-    if (!text || text.length < 8) return;
-    if (/^(thank you|thanks|okay|ok|uh|um|hmm|yeah|yes|no|alright|sure|right|got it)\.?$/i.test(text)) return;
-
+async function transcribeChunk(blob){
+  var wk=getWhisperKey(); if(!wk)return;
+  var fd=new FormData();
+  fd.append('file',blob,'audio.webm');
+  fd.append('model','whisper-1');
+  fd.append('language','en');
+  fd.append('prompt','AppSec interview question about application security, OWASP, DevSecOps, cloud security, vulnerability management.');
+  try{
+    var resp=await fetch('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{'Authorization':'Bearer '+wk},body:fd});
+    if(!resp.ok)return;
+    var data=await resp.json();
+    var text=(data.text||'').trim();
+    if(!text||text.length<8)return;
+    if(/^(thank you|thanks|okay|ok|uh|um|hmm|yeah|yes|no|alright|sure|right|got it)\.?$/i.test(text))return;
     handleTabTranscription(text);
-  } catch(e) {
-    // Network errors — skip silently so capture loop continues
-  }
+  }catch(e){}
 }
 
-function handleTabTranscription(text) {
-  sw('chat'); // Make sure chat tab is visible
-
-  var inp = document.getElementById('ci');
-  var isQuestion = looksLikeQuestion(text);
-
-  // Always show a banner so the user can see what was heard
+function handleTabTranscription(text){
+  sw('chat');
+  var inp=document.getElementById('ci');
+  var isQ=looksLikeQuestion(text);
+  // Show preview pill above search bar
+  document.getElementById('tp-text').textContent=text;
+  document.getElementById('transcription-preview').classList.add('visible');
+  // Put transcribed text directly into the search bar
+  inp.value=text;
+  resize(inp);
+  inp.style.borderColor='var(--cyan)';
+  setTimeout(function(){inp.style.borderColor='';},1500);
   addTabBanner(text);
-
-  if (autoSendTab && isQuestion) {
-    inp.value = text;
-    resize(inp);
-    setTimeout(sendMsg, 500);
-  } else {
-    // Append to input box for manual review / editing
-    var existing = inp.value.trim();
-    inp.value = existing ? existing + ' ' + text : text;
-    resize(inp);
-    if (!isQuestion) toast('Heard (not a question): ' + text.slice(0, 60), 'info');
-  }
+  if(autoSendTab&&isQ)setTimeout(sendMsg,600);
 }
 
-function addTabBanner(text) {
-  var c = document.getElementById('chat-msgs');
-  var d = document.createElement('div');
-  d.className = 'tab-banner';
-  var preview = text.length > 90 ? text.slice(0, 90) + '…' : text;
-  d.innerHTML = '<span>🖥️ ' + preview.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</span>';
-  c.appendChild(d);
-  c.scrollTop = c.scrollHeight;
+function dismissPreview(){
+  document.getElementById('transcription-preview').classList.remove('visible');
 }
 
-function looksLikeQuestion(text) {
-  var t = text.toLowerCase().trim();
-  return text.indexOf('?') !== -1 ||
-    t.indexOf('tell me') === 0 ||
-    t.indexOf('describe') === 0 ||
-    t.indexOf('explain') === 0 ||
-    t.indexOf('how ') === 0 ||
-    t.indexOf('what ') === 0 ||
-    t.indexOf('why ') === 0 ||
-    t.indexOf('can you') === 0 ||
-    t.indexOf('could you') === 0 ||
-    t.indexOf('walk me') === 0 ||
-    t.indexOf('talk me') === 0 ||
-    t.indexOf('have you') === 0 ||
-    t.indexOf('do you') === 0 ||
-    t.indexOf('would you') === 0 ||
-    t.indexOf('give me') === 0 ||
-    t.indexOf('share ') === 0 ||
-    t.indexOf('discuss') === 0 ||
-    t.indexOf('compare') === 0 ||
-    t.indexOf('when ') === 0 ||
-    t.indexOf('where ') === 0;
-}
-
-function saveWhisperSettings() {
-  var wk = document.getElementById('wk').value.trim();
-  if (wk) whisperKey = wk;
-  autoSendTab = document.getElementById('auto-send-cb').checked;
-  toast('Tab audio settings saved ✓', 'ok');
-}
-
-// ================================================================
+function addTabBanner(text){
+  var c=document.getElementById('chat-msgs');
+  var d=document.createElement('div'); d.className='tab-banner';
+  var preview=text.length>90?text.slice(0,90)+'…':text;
+  d.innerHTML='<span>🖥️
+======================================
 // TOAST
 // ================================================================
 function toast(msg, type) {
@@ -1727,5 +1708,30 @@ function toast(msg, type) {
   setTimeout(function() { t.classList.remove('show'); }, 3000);
 }
 </script>
+  <div id="zoom-modal-overlay">
+  <div class="zoom-modal">
+    <h3>🖥️ Connect Zoom / Teams Audio</h3>
+    <div class="zm-sub">Follow these 3 steps — takes 15 seconds</div>
+    <div class="zm-steps">
+      <div class="zm-step">
+        <div class="zm-step-num">1</div>
+        <div class="zm-step-text">Click <b>Start Capture</b> below — Chrome opens a screen-share picker.</div>
+      </div>
+      <div class="zm-step">
+        <div class="zm-step-num">2</div>
+        <div class="zm-step-text">In the dialog, click the <b>Tab</b> tab at the top and select your <b>Zoom or Teams</b> browser tab.</div>
+      </div>
+      <div class="zm-step">
+        <div class="zm-step-num">3</div>
+        <div class="zm-step-text"><b style="color:var(--red)">Critical:</b> At the bottom tick de>Share tab audio</code> ✓ then click <b>Share</b>. Without this, no audio is captured.</div>
+      </div>
+    </div>
+    <div class="zm-btns">
+      <button class="btn bo" onclick="closeZoomModal()">Cancel</button>
+      <button class="btn bc" onclick="startZoomCapture()">▶ Start Capture</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
